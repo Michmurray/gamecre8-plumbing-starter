@@ -1,21 +1,17 @@
 // api/generatr.js
-
 export default function handler(req, res) {
   if (req.method === "POST") {
     try {
       const { prompt } = req.body;
-
       if (!prompt) {
         return res.status(400).json({ error: "Missing prompt" });
       }
-
-      // Stub: Replace this with your actual game generation logic
+      // Stub game object
       const game = {
         id: Date.now(),
         prompt,
         message: `Game generated for prompt: "${prompt}"`,
       };
-
       return res.status(200).json(game);
     } catch (error) {
       console.error(error);
