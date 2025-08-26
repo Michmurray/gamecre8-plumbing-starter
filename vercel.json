@@ -1,6 +1,9 @@
 {
   "cleanUrls": true,
   "cron": [
-    { "path": "/api/diag?fix=1", "schedule": "0 7 * * *" }
+    { "path": "/api/manifest-build?merge=1", "schedule": "45 6 * * *" },
+    { "path": "/api/manifest-validate",     "schedule": "50 6 * * *" },
+    { "path": "/api/run-queue",             "schedule": "*/10 * * * *" },
+    { "path": "/api/diag?fix=1",            "schedule": "0 7 * * *" }
   ]
 }
