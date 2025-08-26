@@ -1,62 +1,68 @@
-<!doctype html>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>GameCre8 — Prompt to Play (Plumbing Starter)</title>
-<style>
-  :root{--bg:#0b0f18;--card:#111827;--fg:#e8e8f0;--muted:#93a1b1;--pri:#4b6bff;--ok:#18c964;--bad:#ff6b6b}
-  html,body{margin:0;background:#000;color:var(--fg);font-family:ui-sans-serif,system-ui}
-  .wrap{max-width:980px;margin:0 auto;padding:16px}
-  .card{background:var(--card);border:1px solid #1c2333;border-radius:12px;padding:16px;margin:12px 0}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  input[type=text]{flex:1;min-width:240px;background:#0e1525;border:1px solid #1c2333;border-radius:10px;color:var(--fg);padding:10px 12px}
-  button{padding:10px 14px;border:0;border-radius:10px;background:#4b6bff;color:#fff;font-weight:800;cursor:pointer}
-  .muted{color:var(--muted)}
-  .ok{color:var(--ok);font-weight:700}
-  .bad{color:var(--bad);font-weight:700}
-  canvas{width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;border:1px solid #1c2333}
-</style>
-<div class="wrap">
-  <h1>GameCre8 — Prompt to Play (Plumbing Starter)</h1>
+<body>
+  <div class="wrap">
+    <h1>GameCre8 — Prompt → Play (Demo)</h1>
+    <form id="f">
+      <label for="p">Your game idea:</label><br />
+      <input id="p" name="p"
+             placeholder="Unicorn jumping cloud to cloud…"
+             required
+             style="width:100%;padding:10px;margin:8px 0;border:1px solid #ccc;border-radius:8px"/>
+      <button type="submit"
+              style="padding:10px 16px;border:0;border-radius:8px;cursor:pointer">
+        Generate
+      </button>
+    </form>
 
-  <div class="card">
-    <div class="row">
-      <input id="prompt" type="text" placeholder="Type a prompt (e.g., Test Space Shooter)" />
-      <button id="gen">Create & Play</button>
-      <a href="./diag.html" style="margin-left:auto;color:#9dc1ff">Run Diagnostics</a>
-    </div>
-    <div id="status" class="muted" style="margin-top:8px">Waiting…</div>
+    <div id="status" style="margin-top:10px;color:#555"></div>
+
+    <h3>Result</h3>
+    <pre id="out"></pre>
+
+    <h3>Share link</h3>
+    <p id="share"></p>
   </div>
 
-  <div class="card" id="gamecard" style="display:none">
-    <canvas id="cv" width="960" height="540"></canvas>
-    <div id="evolve" class="row" style="margin-top:10px;gap:10px"></div>
-  </div>
-</div>
+  <script>
+    const form = document.getElementById("f");
+    const statusEl = document.getElementById("status");
+    const outEl = document.getElementById("out");
+    const shareEl = document.getElementById("share");
 
-<script>
-const S = (id)=>document.getElementById(id);
-const statusEl = S('status');
-const evolveEl = S('evolve');
-const canvas = S('cv'), ctx = canvas.getContext('2d');
-let CFG=null, IMGS={}, bullets=[], enemies=[], meteors=[], player=null, keys={};
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      shareEl.textContent = "";
+      outEl.textContent = "";
+      statusEl.textContent = "Generating…";
 
-addEventListener('keydown', e=>keys[e.key]=1);
-addEventListener('keyup', e=>keys[e.key]=0);
+      const prompt = document.getElementById("p").value.trim();
 
-document.getElementById('gen').onclick = async () => {
-  const prompt = S('prompt').value || 'Test Game';
-  statusEl.textContent = 'Generating…';
-  try{
-    const r = await fetch('/api/generate', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ prompt, slug:'galaxy-blaster' })
+      try {
+        // 1) Generate
+        const genRes = await fetch("/api/generatr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt })
+        });
+        const game = await genRes.json();
+        if (!genRes.ok) throw new Error(game.error || "Generation failed");
+
+        outEl.textContent = JSON.stringify(game, null, 2);
+
+        // 2) Save (auto)
+        statusEl.textContent = "Saving…";
+        const saveRes = await fetch("/api/save-game", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt, game })
+        });
+        const saved = await saveRes.json();
+        if (!saveRes.ok) throw new Error(saved.error || "Save failed");
+
+        statusEl.textContent = "Done!";
+        shareEl.innerHTML = `<a href="${saved.share_url}" target="_blank" rel="noopener">Open your game</a>`;
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+      }
     });
-    const cfg = await r.json();
-    CFG = cfg;
-    statusEl.innerHTML = '<span class="ok">OK</span> Generated config';
-    document.getElementById('gamecard').style.display='block';
-  }catch(e){
-    statusEl.innerHTML = '<span class="bad">FAIL</span> ' + (e.message||e);
-  }
-};
-</script>
+  </script>
+</body>
