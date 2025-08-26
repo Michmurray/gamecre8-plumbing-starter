@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Play | GameCre8</title>
+  <style>
+    body {
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      margin: 0;
+      background: #fafafa;
+      color: #0b0b0f;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #fff;
+      border: 1px solid #eee;
+      border-radius: 12px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #f7f7f7;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #eee;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Play</h1>
+    <p id="status">Loading…</p>
+    <div id="content" style="display:none">
+      <h3 id="prompt"></h3>
+      <p><strong>Generated:</strong> <span id="created_at"></span></p>
+      <h4>Game JSON (demo)</h4>
+      <pre id="game_json"></pre>
+    </div>
+  </div>
+
+  <script>
+    const slug = new URLSearchParams(location.search).get("slug");
+
+    if (!slug) {
+      document.getElementById("status").textContent = "Missing slug.";
+    } else {
+      fetch(`/api/get-game?slug=${encodeURIComponent(slug)}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.error) throw new Error(d.error);
+
+          document.getElementById("status").style.display = "none";
+          document.getElementById("content").style.display = "block";
+
+          document.getElementById("prompt").textContent = d.prompt;
+          document.getElementById("created_at").textContent = new Date(d.created_at).toLocaleString();
+          document.getElementById("game_json").textContent = JSON.stringify(d.game_json, null, 2);
+        })
+        .catch(e => {
+          document.getElementById("status").textContent = "Error: " + e.message;
+        });
+    }
+  </script>
+</body>
+</html>
