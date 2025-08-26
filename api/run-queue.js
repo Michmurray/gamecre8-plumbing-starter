@@ -14,7 +14,7 @@ const db = createClient(
 
 export default async function handler(req, res) {
   try {
-    // 1) pull some pending
+    // 1) pull some pending jobs
     const { data: pending, error } = await db
       .from("prompt_queue").select("*")
       .eq("status","pending")
@@ -24,7 +24,7 @@ export default async function handler(req, res) {
 
     const results = [];
     for (const row of pending) {
-      // 2) claim this job
+      // 2) claim this job (avoid double work)
       const claim = await db.from("prompt_queue")
         .update({ status:"working" })
         .eq("id", row.id).eq("status","pending")
@@ -32,7 +32,7 @@ export default async function handler(req, res) {
       if (claim.error || !claim.data) continue;
 
       try {
-        // 3a) optional: get a brief from Olli for better tuning
+        // 3a) optional Olli brief for better tuning
         let brief = null;
         try {
           brief = await post("/api/olli-brief", {
