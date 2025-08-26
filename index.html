@@ -1,116 +1,15 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>GameCre8 — Prompt → Play (Demo)</title>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      margin: 0;
-      background: #fafafa;
-      color: #0b0b0f;
-    }
-    .wrap {
-      max-width: 760px;
-      margin: 40px auto;
-      padding: 20px;
-      background: #fff;
-      border: 1px solid #eee;
-      border-radius: 12px;
-    }
-    input {
-      width: 100%;
-      padding: 10px;
-      margin: 8px 0;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-    }
-    button {
-      padding: 10px 16px;
-      border: 0;
-      border-radius: 8px;
-      cursor: pointer;
-      background: #0070f3;
-      color: #fff;
-      font-weight: bold;
-    }
-    pre {
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      background: #f7f7f7;
-      padding: 12px;
-      border-radius: 8px;
-      border: 1px solid #eee;
-    }
-    a {
-      color: #0070f3;
-      text-decoration: none;
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h1>GameCre8 — Prompt → Play (Demo)</h1>
-    <form id="f">
-      <label for="p">Your game idea:</label><br />
-      <input id="p" name="p"
-             placeholder="Unicorn jumping cloud to cloud…"
-             required />
-      <button type="submit">Generate</button>
-    </form>
+// 2) Save (auto)
+statusEl.textContent = "Saving…";
+const saveRes = await fetch("/api/save-game", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt, game })
+});
+const saved = await saveRes.json();
+if (!saveRes.ok) throw new Error(saved.error || "Save failed");
 
-    <div id="status" style="margin-top:10px;color:#555"></div>
+statusEl.textContent = "Done!";
 
-    <h3>Result</h3>
-    <pre id="out"></pre>
-
-    <h3>Share link</h3>
-    <p id="share"></p>
-  </div>
-
-  <script>
-    const form = document.getElementById("f");
-    const statusEl = document.getElementById("status");
-    const outEl = document.getElementById("out");
-    const shareEl = document.getElementById("share");
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      shareEl.textContent = "";
-      outEl.textContent = "";
-      statusEl.textContent = "Generating…";
-
-      const prompt = document.getElementById("p").value.trim();
-
-      try {
-        // 1) Generate
-        const genRes = await fetch("/api/generatr", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt })
-        });
-        const game = await genRes.json();
-        if (!genRes.ok) throw new Error(game.error || "Generation failed");
-
-        outEl.textContent = JSON.stringify(game, null, 2);
-
-        // 2) Save (auto)
-        statusEl.textContent = "Saving…";
-        const saveRes = await fetch("/api/save-game", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, game })
-        });
-        const saved = await saveRes.json();
-        if (!saveRes.ok) throw new Error(saved.error || "Save failed");
-
-        statusEl.textContent = "Done!";
-        shareEl.innerHTML = `<a href="${saved.share_url}" target="_blank" rel="noopener">Open your game</a>`;
-      } catch (err) {
-        statusEl.textContent = "Error: " + err.message;
-      }
-    });
-  </script>
-</body>
-</html>
+// Build a RELATIVE link so it works regardless of PUBLIC_SITE_URL
+const relativeLink = `/play.html?slug=${encodeURIComponent(saved.slug)}`;
+shareEl.innerHTML = `<a href="${relativeLink}" target="_blank" rel="noopener">Open your game</a>`;
