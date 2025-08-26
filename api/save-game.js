@@ -18,12 +18,16 @@ export default async function handler(req, res) {
 
     const slug = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
 
-    const { error } = await supabase.from("games").insert({
+    const { error } = await supabase.from("game_saves").insert({
       prompt,
       game_json: game,
       share_slug: slug,
     });
-    if (error) return res.status(500).json({ error: "DB insert failed" });
+
+    if (error) {
+      console.error("DB insert error:", error);
+      return res.status(500).json({ error: "DB insert failed" });
+    }
 
     const share_url = `${process.env.PUBLIC_SITE_URL}/play.html?slug=${slug}`;
     return res.status(200).json({ ok: true, slug, share_url });
