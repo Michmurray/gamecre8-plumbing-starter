@@ -13,7 +13,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { prompt, game } = req.body || {};
+    const { prompt, game, engine = null, brief = null } = req.body || {};
     if (!prompt || !game) return res.status(400).json({ error: "Missing prompt or game" });
 
     const slug = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
@@ -22,6 +22,8 @@ export default async function handler(req, res) {
       prompt,
       game_json: game,
       share_slug: slug,
+      engine,
+      brief
     });
 
     if (error) {
