@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>GameCre8 — Prompt to Play (Plumbing Starter)</title>
+<style>
+  :root{--bg:#0b0f18;--card:#111827;--fg:#e8e8f0;--muted:#93a1b1;--pri:#4b6bff;--ok:#18c964;--bad:#ff6b6b}
+  html,body{margin:0;background:#000;color:var(--fg);font-family:ui-sans-serif,system-ui}
+  .wrap{max-width:980px;margin:0 auto;padding:16px}
+  .card{background:var(--card);border:1px solid #1c2333;border-radius:12px;padding:16px;margin:12px 0}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input[type=text]{flex:1;min-width:240px;background:#0e1525;border:1px solid #1c2333;border-radius:10px;color:var(--fg);padding:10px 12px}
+  button{padding:10px 14px;border:0;border-radius:10px;background:#4b6bff;color:#fff;font-weight:800;cursor:pointer}
+  .muted{color:var(--muted)}
+  .ok{color:var(--ok);font-weight:700}
+  .bad{color:var(--bad);font-weight:700}
+  canvas{width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;border:1px solid #1c2333}
+</style>
+<div class="wrap">
+  <h1>GameCre8 — Prompt to Play (Plumbing Starter)</h1>
+
+  <div class="card">
+    <div class="row">
+      <input id="prompt" type="text" placeholder="Type a prompt (e.g., Test Space Shooter)" />
+      <button id="gen">Create & Play</button>
+      <a href="./diag.html" style="margin-left:auto;color:#9dc1ff">Run Diagnostics</a>
+    </div>
+    <div id="status" class="muted" style="margin-top:8px">Waiting…</div>
+  </div>
+
+  <div class="card" id="gamecard" style="display:none">
+    <canvas id="cv" width="960" height="540"></canvas>
+    <div id="evolve" class="row" style="margin-top:10px;gap:10px"></div>
+  </div>
+</div>
+
+<script>
+const S = (id)=>document.getElementById(id);
+const statusEl = S('status');
+const evolveEl = S('evolve');
+const canvas = S('cv'), ctx = canvas.getContext('2d');
+let CFG=null, IMGS={}, bullets=[], enemies=[], meteors=[], player=null, keys={};
+
+addEventListener('keydown', e=>keys[e.key]=1);
+addEventListener('keyup', e=>keys[e.key]=0);
+
+document.getElementById('gen').onclick = async () => {
+  const prompt = S('prompt').value || 'Test Game';
+  statusEl.textContent = 'Generating…';
+  try{
+    const r = await fetch('/api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ prompt, slug:'galaxy-blaster' })
+    });
+    const cfg = await r.json();
+    CFG = cfg;
+    statusEl.innerHTML = '<span class="ok">OK</span> Generated config';
+    document.getElementById('gamecard').style.display='block';
+  }catch(e){
+    statusEl.innerHTML = '<span class="bad">FAIL</span> ' + (e.message||e);
+  }
+};
+</script>
