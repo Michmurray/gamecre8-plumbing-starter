@@ -13,23 +13,18 @@ export default async function handler(req, res) {
     let row = null, err = null;
 
     if (id) {
-      const { data, error } = await supabase
-        .from('games')
+      const r = await supabase.from('games')
         .select('id,slug,share_slug,title,prompt,game_json,created_at')
         .eq('id', id).maybeSingle();
-      row = data; err = error;
+      row = r.data; err = r.error;
     } else if (slug) {
-      // Try slug first
-      let r1 = await supabase
-        .from('games')
+      // try slug, then share_slug
+      let r1 = await supabase.from('games')
         .select('id,slug,share_slug,title,prompt,game_json,created_at')
         .eq('slug', slug).order('id', { ascending:false }).limit(1).maybeSingle();
       row = r1.data; err = r1.error;
-
-      // If not found, try share_slug
       if (!row) {
-        let r2 = await supabase
-          .from('games')
+        let r2 = await supabase.from('games')
           .select('id,slug,share_slug,title,prompt,game_json,created_at')
           .eq('share_slug', slug).order('id', { ascending:false }).limit(1).maybeSingle();
         row = r2.data; err = r2.error;
@@ -41,7 +36,6 @@ export default async function handler(req, res) {
     if (err)   return res.status(500).json({ ok:false, error: err.message || 'query error' });
     if (!row)  return res.status(404).json({ ok:false, error:'Not found' });
 
-    // Public URLs for chosen art (bucket is public)
     const spPath = row?.game_json?.art?.sprite;
     const bgPath = row?.game_json?.art?.background;
     const sprite_url = spPath ? supabase.storage.from(BUCKET).getPublicUrl(spPath).data.publicUrl : null;
