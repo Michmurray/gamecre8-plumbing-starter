@@ -7,18 +7,19 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-// tolerant inline scanner
 const BUCKET = 'game-assets';
-const SPRITE_DIRS = ['Spritesheet/', 'sprite/', 'Sprites/', 'PNG/'];
-const BG_DIRS = ['Backgrounds/', 'backgrounds/', 'BG/', 'bg/'];
+const SPRITE_DIRS = ['sprite/', 'PNG/', 'Spritesheet/', 'Sprites/']; // prefer your real dirs first
+const BG_DIRS = ['backgrounds/', 'Backgrounds/', 'BG/', 'bg/'];
 const isImage = (n) => /\.(png|jpe?g|gif|webp)$/i.test(n);
+
 async function listDir(prefix) {
   const { data } = await supabase.storage.from(BUCKET)
     .list(prefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
   return (data || []).filter(it => it?.name && isImage(it.name)).map(it => `${prefix}${it.name}`);
 }
+
 async function scanAssets() {
-  const [s,b] = await Promise.all([
+  const [s, b] = await Promise.all([
     Promise.all(SPRITE_DIRS.map(listDir)),
     Promise.all(BG_DIRS.map(listDir)),
   ]);
@@ -26,27 +27,30 @@ async function scanAssets() {
   const backgrounds = [...new Set(b.flat())];
   return { counts: { sprites: sprites.length, backgrounds: backgrounds.length }, sprites, backgrounds };
 }
+
 function makeSlug(input) {
   const base = (input || 'game').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)+/g,'').slice(0,48);
   const rand = Math.random().toString(36).slice(2,8);
   return `${base}-${rand}`;
 }
 
-// Probe helper: check which path exists on THIS request's origin
-async function pickWorkingPlayURL(req, slug) {
-  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
-  const host = (req.headers.host || '').toString();
-  const origin = `${proto}://${host}`;
-  const candidates = [`/play?slug=${slug}`, `/play.html?slug=${slug}`];
-
-  for (const path of candidates) {
-    try {
-      const r = await fetch(origin + path, { method: 'HEAD' });
-      if (r.ok) return { url: origin + path, candidates: { play: origin + candidates[0], play_html: origin + candidates[1] } };
-    } catch {}
+// build public URL + probe it
+function publicUrl(path) {
+  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+}
+async function urlOk(url) {
+  try { const r = await fetch(url, { method: 'HEAD' }); return r.ok; } catch { return false; }
+}
+async function pickValid(arr, maxTries = 8) {
+  if (!arr.length) return null;
+  for (let i = 0; i < maxTries; i++) {
+    const p = arr[Math.floor(Math.random() * arr.length)];
+    const u = publicUrl(p);
+    if (await urlOk(u)) return p;
   }
-  // fallback: prefer static html even if HEAD failed (some hosts block HEAD)
-  return { url: origin + candidates[1], candidates: { play: origin + candidates[0], play_html: origin + candidates[1] } };
+  // last resort: scan sequentially
+  for (const p of arr) { if (await urlOk(publicUrl(p))) return p; }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -69,9 +73,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok:false, error:'No assets found', counts:a.counts });
     }
 
-    // 2) choose art
-    const pick = (arr) => arr[Math.floor(Math.random()*arr.length)];
-    const sprite = pick(a.sprites), background = pick(a.backgrounds);
+    // 2) pick only assets that return 200
+    const sprite = await pickValid(a.sprites);
+    const background = await pickValid(a.backgrounds);
+    if (!sprite || !background) {
+      return res.status(200).json({ ok:false, error:'No valid asset URLs after probing', counts:a.counts });
+    }
 
     // 3) save
     const share_slug = makeSlug(prompt);
@@ -80,30 +87,31 @@ export default async function handler(req, res) {
 
     let ins = await supabase.from('games')
       .insert({ prompt, title, game_json, share_slug, slug: share_slug })
-      .select('id, slug, share_slug')
-      .maybeSingle();
+      .select('id, slug, share_slug').maybeSingle();
 
     if (ins.error || !ins.data) {
       const msg = (ins.error?.message || ins.error?.details || '').toLowerCase();
       if (msg.includes('title') && msg.includes('does not exist')) {
         ins = await supabase.from('games')
           .insert({ prompt, game_json, share_slug, slug: share_slug })
-          .select('id, slug, share_slug')
-          .maybeSingle();
+          .select('id, slug, share_slug').maybeSingle();
       }
       if (ins.error || !ins.data) return res.status(500).json({ ok:false, error: ins.error?.message || 'insert failed' });
     }
 
     const slug = ins.data.share_slug || ins.data.slug || share_slug;
 
-    // 4) choose a working play URL for THIS deploy
-    const chosen = await pickWorkingPlayURL(req, slug);
+    // Prefer the serverless page; it always exists due to vercel.json rewrite
+    const proto = (req.headers['x-forwarded-proto'] || 'https') + '';
+    const host  = (req.headers.host || '') + '';
+    const base  = `${proto}://${host}`;
+    const url   = `${base}/api/play?slug=${encodeURIComponent(slug)}`;
 
     return res.status(200).json({
       ok: true,
       slug,
-      url: chosen.url,
-      candidates: chosen.candidates,
+      url,
+      candidates: { play_api: url, play: `${base}/play?slug=${slug}`, play_html: `${base}/play.html?slug=${slug}` },
       chosen_art: { sprite, background },
       counts: a.counts
     });
