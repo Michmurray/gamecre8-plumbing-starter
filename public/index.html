@@ -1,16 +1,1 @@
-<!doctype html>
-<meta charset="utf-8">
-<title>GameCre8 — Prompt → Play</title>
-<script>
-  const CANON = 'https://gamecre8-plumbing-starter.vercel.app';
-  if (location.origin !== CANON) {
-    location.replace(CANON + location.pathname + location.search);
-  }
-</script>
-<form action="https://gamecre8-plumbing-starter.vercel.app/api/prompt-to-play" method="get"
-      style="margin:48px;font:16px system-ui">
-  <input type="hidden" name="redirect" value="1">
-  <input name="prompt" placeholder="Describe your game…" autofocus
-         style="padding:12px;width:480px;max-width:90%">
-  <button type="submit" style="padding:12px 16px">Create & Play</button>
-</form>
+
