@@ -1,7 +1,6 @@
 // api/prompt-to-play.js
-// One-stop "prompt → play": queues the prompt, runs the generator,
-// and (optionally) redirects you to the game's play.html.
-// No manual manifest step required.
+// One-stop "prompt → play": scans storage, queues the prompt, runs the queue,
+// and optionally redirects to the playable game.
 //
 // Usage:
 //   /api/prompt-to-play?prompt=pastel%20cloud%20jumper&redirect=1
@@ -20,46 +19,67 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Provide ?prompt=your%20idea" });
     }
 
-    // Optional quick scan so the generator knows what exists.
+    // === 1) RECURSIVE SCAN OF STORAGE (Spritesheet/** and Backgrounds/**)
     let counts = null;
     try {
-      const sprites = await list("Spritesheet");
-      const backgrounds = await list("Backgrounds");
-      counts = { sprites: sprites.length, backgrounds: backgrounds.length };
+      const spriteFiles = await listRecursive("Spritesheet");
+      const bgFiles     = await listRecursive("Backgrounds");
+
+      counts = { sprites: spriteFiles.length, backgrounds: bgFiles.length };
+
+      // Cache a simple manifest for the current lambda instance
       global._ASSET_MANIFEST = {
         generatedAt: new Date().toISOString(),
-        sprites: sprites.map((n) => ({ name: n, url: `Spritesheet/${n}` })),
-        backgrounds: backgrounds.map((n) => ({ name: n, url: `Backgrounds/${n}` }))
+        sprites: spriteFiles.map((p) => ({ name: basename(p), url: p })),
+        backgrounds: bgFiles.map((p) => ({ name: basename(p), url: p }))
       };
-    } catch (_) {}
+    } catch (scanErr) {
+      // non-fatal; we still try to queue
+      counts = { sprites: 0, backgrounds: 0, warn: String(scanErr) };
+    }
 
+    // Where to call sub-endpoints
     const site = process.env.PUBLIC_SITE_URL || `https://${req.headers.host}`;
 
-    // 1) Queue the prompt
-    const qRes = await safeJsonFetch(`${site}/api/queue-prompt?prompt=${encodeURIComponent(prompt)}`);
+    // === 2) QUEUE THE PROMPT
+    const qUrl = `${site}/api/queue-prompt?prompt=${encodeURIComponent(prompt)}`;
+    const queued = await safeFetchJson(qUrl);
 
-    // 2) Run the queue now
-    const rRes = await safeJsonFetch(`${site}/api/run-queue`);
+    // If we didn't get JSON, include the raw text so we can see why
+    if (queued._raw && !queued.ok) {
+      return res.status(200).json({
+        ok: false,
+        step: "queue-prompt",
+        info: "queue-prompt did not return JSON",
+        prompt,
+        counts,
+        queued
+      });
+    }
+
+    // === 3) RUN THE QUEUE NOW
+    const run = await safeFetchJson(`${site}/api/run-queue`);
 
     // Extract first slug if present
     const slug =
-      (rRes && (rRes.slug || (Array.isArray(rRes.slugs) && rRes.slugs[0]))) ||
-      (qRes && qRes.slug) ||
+      (run && (run.slug || (Array.isArray(run.slugs) && run.slugs[0]))) ||
+      (queued && queued.slug) ||
       null;
 
     const playUrl = slug ? `${site}/play.html?slug=${encodeURIComponent(slug)}` : null;
 
+    // === 4) OPTIONAL REDIRECT
     if (req.query.redirect === "1" && playUrl) {
       res.writeHead(302, { Location: playUrl });
       return res.end();
     }
 
     return res.status(200).json({
-      ok: true,
+      ok: !!slug,
       prompt,
       counts,
-      queued: qRes,
-      run: rRes,
+      queued,
+      run,
       slug,
       playUrl
     });
@@ -68,19 +88,49 @@ export default async function handler(req, res) {
   }
 }
 
-async function list(prefix) {
+function basename(p) {
+  const i = p.lastIndexOf("/");
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+async function listRecursive(prefix) {
+  // Returns paths like "Spritesheet/foo.png" including nested folders
+  const results = [];
+  await walk(prefix, results);
+  return results.filter((p) => /\.(png|jpg|jpeg|gif|webp)$/i.test(p));
+}
+
+async function walk(prefix, out) {
   const { data, error } = await db.storage.from(BUCKET).list(prefix, {
     limit: 1000,
     sortBy: { column: "name", order: "asc" }
   });
-  if (error || !data) return [];
-  return data.filter((x) => !x.id).map((x) => x.name);
+  if (error || !data) return;
+  for (const item of data) {
+    // Supabase "list" returns both files and "folders" (with null/empty metadata.size)
+    const isFolder = !item.metadata || typeof item.metadata.size !== "number";
+    if (isFolder) {
+      // Recurse into subfolder: prefix + "/" + item.name
+      await walk(`${prefix}/${item.name}`, out);
+    } else {
+      out.push(`${prefix}/${item.name}`);
+    }
+  }
 }
 
-async function safeJsonFetch(url) {
+async function safeFetchJson(url) {
   try {
     const r = await fetch(url);
-    return await r.json();
+    const ct = r.headers.get("content-type") || "";
+    if (/application\/json/i.test(ct)) {
+      return await r.json();
+    }
+    const text = await r.text();
+    try {
+      return JSON.parse(text); // maybe still JSON
+    } catch {
+      return { ok: false, status: r.status, _raw: text.slice(0, 500) };
+    }
   } catch (e) {
     return { ok: false, error: String(e) };
   }
