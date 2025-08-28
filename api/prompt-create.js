@@ -7,19 +7,18 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-// tolerant, inline scanner
+// tolerant inline scanner
 const BUCKET = 'game-assets';
 const SPRITE_DIRS = ['Spritesheet/', 'sprite/', 'Sprites/', 'PNG/'];
 const BG_DIRS = ['Backgrounds/', 'backgrounds/', 'BG/', 'bg/'];
 const isImage = (n) => /\.(png|jpe?g|gif|webp)$/i.test(n);
-
 async function listDir(prefix) {
   const { data } = await supabase.storage.from(BUCKET)
     .list(prefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
   return (data || []).filter(it => it?.name && isImage(it.name)).map(it => `${prefix}${it.name}`);
 }
 async function scanAssets() {
-  const [s, b] = await Promise.all([
+  const [s,b] = await Promise.all([
     Promise.all(SPRITE_DIRS.map(listDir)),
     Promise.all(BG_DIRS.map(listDir)),
   ]);
@@ -28,53 +27,51 @@ async function scanAssets() {
   return { counts: { sprites: sprites.length, backgrounds: backgrounds.length }, sprites, backgrounds };
 }
 function makeSlug(input) {
-  const base = (input || 'game').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '').slice(0,48);
+  const base = (input || 'game').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)+/g,'').slice(0,48);
   const rand = Math.random().toString(36).slice(2,8);
   return `${base}-${rand}`;
 }
 
-// Try to pick a working play URL by probing both candidates
-async function choosePlayURL(slug) {
-  const base = (process.env.PUBLIC_SITE_URL || '').replace(/\/+$/,'');
-  const paths = [
-    `${base}/play?slug=${encodeURIComponent(slug)}`,
-    `${base}/play.html?slug=${encodeURIComponent(slug)}`
-  ].filter(Boolean);
+// Probe helper: check which path exists on THIS request's origin
+async function pickWorkingPlayURL(req, slug) {
+  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
+  const host = (req.headers.host || '').toString();
+  const origin = `${proto}://${host}`;
+  const candidates = [`/play?slug=${slug}`, `/play.html?slug=${slug}`];
 
-  // If PUBLIC_SITE_URL not set, return relative paths (no probe)
-  if (!base) return { chosen: `/play?slug=${slug}`, candidates: { play:`/play?slug=${slug}`, play_html:`/play.html?slug=${slug}` } };
-
-  for (const url of paths) {
+  for (const path of candidates) {
     try {
-      const resp = await fetch(url, { method: 'HEAD' });
-      if (resp.ok) return { chosen: url, candidates: { play: paths[0], play_html: paths[1] } };
+      const r = await fetch(origin + path, { method: 'HEAD' });
+      if (r.ok) return { url: origin + path, candidates: { play: origin + candidates[0], play_html: origin + candidates[1] } };
     } catch {}
   }
-  // If neither HEAD works, fall back to /play.html (static most common)
-  return { chosen: paths[1], candidates: { play: paths[0], play_html: paths[1] } };
+  // fallback: prefer static html even if HEAD failed (some hosts block HEAD)
+  return { url: origin + candidates[1], candidates: { play: origin + candidates[0], play_html: origin + candidates[1] } };
 }
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'GET' && req.method !== 'POST') {
-      res.setHeader('Allow', 'GET, POST'); return res.status(405).json({ ok:false, error:'Method Not Allowed' });
+    const method = req.method || 'GET';
+    if (method !== 'GET' && method !== 'POST') {
+      res.setHeader('Allow', 'GET, POST');
+      return res.status(405).json({ ok:false, error:'Method Not Allowed' });
     }
-    const prompt = (req.method === 'GET'
+
+    const prompt = (method === 'GET'
       ? (req.query.prompt || '')
       : (typeof req.body === 'string'
           ? (JSON.parse(req.body || '{}').prompt || '')
           : (req.body?.prompt || ''))).toString().trim() || 'untitled';
 
     // 1) assets
-    const assets = await scanAssets();
-    if (assets.counts.sprites === 0 || assets.counts.backgrounds === 0) {
-      return res.status(200).json({ ok:false, error:'No assets found', counts: assets.counts });
+    const a = await scanAssets();
+    if (a.counts.sprites === 0 || a.counts.backgrounds === 0) {
+      return res.status(200).json({ ok:false, error:'No assets found', counts:a.counts });
     }
 
-    // 2) pick art
-    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-    const sprite = pick(assets.sprites);
-    const background = pick(assets.backgrounds);
+    // 2) choose art
+    const pick = (arr) => arr[Math.floor(Math.random()*arr.length)];
+    const sprite = pick(a.sprites), background = pick(a.backgrounds);
 
     // 3) save
     const share_slug = makeSlug(prompt);
@@ -83,32 +80,32 @@ export default async function handler(req, res) {
 
     let ins = await supabase.from('games')
       .insert({ prompt, title, game_json, share_slug, slug: share_slug })
-      .select('id, slug, share_slug').maybeSingle();
+      .select('id, slug, share_slug')
+      .maybeSingle();
 
     if (ins.error || !ins.data) {
       const msg = (ins.error?.message || ins.error?.details || '').toLowerCase();
       if (msg.includes('title') && msg.includes('does not exist')) {
         ins = await supabase.from('games')
           .insert({ prompt, game_json, share_slug, slug: share_slug })
-          .select('id, slug, share_slug').maybeSingle();
+          .select('id, slug, share_slug')
+          .maybeSingle();
       }
-      if (ins.error || !ins.data) {
-        return res.status(500).json({ ok:false, error: ins.error?.message || 'insert failed' });
-      }
+      if (ins.error || !ins.data) return res.status(500).json({ ok:false, error: ins.error?.message || 'insert failed' });
     }
 
     const slug = ins.data.share_slug || ins.data.slug || share_slug;
 
-    // 4) choose a working play URL
-    const pickURL = await choosePlayURL(slug);
+    // 4) choose a working play URL for THIS deploy
+    const chosen = await pickWorkingPlayURL(req, slug);
 
     return res.status(200).json({
       ok: true,
       slug,
-      url: pickURL.chosen,
-      candidates: pickURL.candidates,
-      chosen: { sprite, background },
-      counts: assets.counts
+      url: chosen.url,
+      candidates: chosen.candidates,
+      chosen_art: { sprite, background },
+      counts: a.counts
     });
   } catch (e) {
     return res.status(500).json({ ok:false, error: e.message || 'error' });
