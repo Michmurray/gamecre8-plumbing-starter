@@ -6,9 +6,13 @@ const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_R
   auth: { persistSession: false }
 });
 
+// List of folders we'll scan for sprites (add/remove as you like)
+const SPRITE_PREFIXES = ["Spritesheet", "sprite", "Sprites", "PNG"];
+const BG_PREFIXES = ["Backgrounds"];
+
 export async function buildManifest() {
-  const sprites = await listRecursive("Spritesheet");
-  const bgs     = await listRecursive("Backgrounds");
+  const sprites = await listMany(SPRITE_PREFIXES);
+  const bgs     = await listMany(BG_PREFIXES);
 
   const spriteAssets = sprites
     .filter(isImage)
@@ -29,7 +33,6 @@ function isImage(p) {
 }
 
 function toAsset(kind, path) {
-  // e.g. "Spritesheet/Ships/shipBlue.png" -> tags: ["spritesheet","ships","shipblue"]
   const parts = path.split("/").map(s => s.toLowerCase());
   const name = parts[parts.length - 1].replace(/\.[^.]+$/, "");
   const words = [
@@ -48,12 +51,20 @@ function toAsset(kind, path) {
 function normalizeTag(t) {
   t = t.replace(/[^a-z0-9]/g, "");
   if (!t) return null;
-  // cheap synonyms
   if (t === "spaceship") t = "ship";
-  if (t === "space") t = "space";
   if (t === "bg" || t === "backgrounds") t = "background";
   if (t === "spritesheet") return null;
   return t;
+}
+
+async function listMany(prefixes) {
+  const all = [];
+  for (const p of prefixes) {
+    const items = await listRecursive(p);
+    all.push(...items);
+  }
+  // de-dup
+  return Array.from(new Set(all));
 }
 
 async function listRecursive(prefix) {
@@ -82,12 +93,10 @@ export function pickBest(assets, wantTags) {
   if (!assets.length) return null;
   const scored = assets.map(a => ({ a, s: score(a.tags, wantTags) }));
   scored.sort((x, y) => y.s - x.s);
-  // fallback: if all scores zero, pick random
   return (scored[0].s > 0) ? scored[0].a : assets[Math.floor(Math.random() * assets.length)];
 }
 
 function score(haveTags, wantTags) {
-  // simple overlap + partial matches
   let s = 0;
   for (const w of wantTags) {
     for (const h of haveTags) {
