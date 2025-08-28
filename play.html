@@ -1,224 +1,58 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Play | GameCre8</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GameCre8 — Play</title>
+  <script>
+    const CANON = 'https://gamecre8-plumbing-starter.vercel.app';
+    if (location.origin !== CANON) {
+      location.replace(CANON + location.pathname + location.search);
+    }
+  </script>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#111;color:#eee}
-    .wrap{max-width:900px;margin:28px auto;padding:16px}
-    #game{display:block;margin:12px 0;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.25);background:#000}
-    .meta{opacity:.8}
-    .hud{position:absolute;left:24px;top:16px;font-weight:600;text-shadow:0 1px 2px rgba(0,0,0,.4)}
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:24px; background:#0b0c10; color:#eaeaf0 }
+    #canvas { width:960px; max-width:100%; height:540px; background:#1a1a1d; border-radius:16px; display:block }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Play</h1>
-    <p id="status" class="meta">Loading…</p>
-    <div style="position:relative">
-      <canvas id="game" width="800" height="450"></canvas>
-      <div id="hud" class="hud"></div>
-    </div>
-    <p class="meta">Controls: ← → to move, ↑ to jump, <strong>Space</strong> to shoot, <strong>R</strong> to restart</p>
-    <p class="meta">Prompt: <span id="prompt"></span></p>
-  </div>
-
+  <h1>Play</h1>
+  <div id="status">Loading…</div>
+  <canvas id="canvas" width="960" height="540"></canvas>
+  <div style="margin:8px 0">Prompt: <span id="promptText"></span></div>
+  <div id="chosenAssets" style="display:flex;gap:12px;align-items:center"></div>
   <script>
-    const slug = new URLSearchParams(location.search).get("slug");
-    const statusEl = document.getElementById("status");
-    const promptEl = document.getElementById("prompt");
-    const canvas = document.getElementById("game");
-    const ctx = canvas.getContext("2d");
-    const hud = document.getElementById("hud");
+    (async () => {
+      const params = new URLSearchParams(location.search);
+      const slug = params.get('slug');
+      const statusEl = document.getElementById('status');
+      const outPrompt = document.getElementById('promptText');
+      const outAssets = document.getElementById('chosenAssets');
+      const cvs = document.getElementById('canvas'); const ctx = cvs.getContext('2d'); ctx.imageSmoothingEnabled = false;
+      if (!slug) { statusEl.textContent = 'Missing slug'; return; }
 
-    if (!slug) { statusEl.textContent = "Missing slug."; }
-    else {
-      fetch(`/api/get-game?slug=${encodeURIComponent(slug)}`)
-        .then(r => r.json())
-        .then(start)
-        .catch(e => statusEl.textContent = "Error: " + e.message);
-    }
+      // We’re on the canonical domain now → relative API works.
+      const r = await fetch(`/api/get-game?slug=${encodeURIComponent(slug)}`);
+      const json = await r.json();
+      if (!json.ok) { statusEl.textContent = 'Error: ' + (json.error || 'Not found'); return; }
+      statusEl.textContent = 'Loaded!'; outPrompt.textContent = json.game?.prompt || '(unknown)';
 
-    function start(data) {
-      if (data.error) { statusEl.textContent = "Error: " + data.error; return; }
-      statusEl.textContent = "Loaded!";
-      promptEl.textContent = data.prompt;
+      outAssets.innerHTML = '';
+      if (json.asset_urls?.background_url) { const bg = new Image(); bg.src = json.asset_urls.background_url; bg.width = 96; outAssets.appendChild(bg); }
+      if (json.asset_urls?.sprite_url) { const sp = new Image(); sp.src = json.asset_urls.sprite_url; sp.width = 64; outAssets.appendChild(sp); }
 
-      const game = data.game_json || {};
-      canvas.width  = game.canvas?.width  || 800;
-      canvas.height = game.canvas?.height || 450;
-      const bg = game.canvas?.background || "#202020";
+      const bgImg = json.asset_urls?.background_url ? await new Promise((ok,err)=>{const i=new Image();i.crossOrigin='anonymous';i.onload=()=>ok(i);i.onerror=err;i.src=json.asset_urls.background_url;}) : null;
+      const spImg = json.asset_urls?.sprite_url ? await new Promise((ok,err)=>{const i=new Image();i.crossOrigin='anonymous';i.onload=()=>ok(i);i.onerror=err;i.src=json.asset_urls.sprite_url;}) : null;
 
-      // --- Player ---
-      const p = Object.assign({
-        x: 80, y: canvas.height - 90, w: 64, h: 64,
-        vx: 0, vy: 0, speed: 3, jump: 12, gravity: 0.6, spriteUrl: null
-      }, game.player || {});
-      const groundY = game.groundY ?? (canvas.height - 50);
-
-      // --- Assets ---
-      let sprite = null, spriteReady = false;
-      if (p.spriteUrl) {
-        sprite = new Image(); sprite.crossOrigin = "anonymous";
-        sprite.onload = () => spriteReady = true;
-        sprite.onerror = () => { sprite = null; spriteReady = false; };
-        sprite.src = p.spriteUrl;
+      function draw() {
+        if (bgImg) ctx.drawImage(bgImg, 0, 0, cvs.width, cvs.height); else { ctx.fillStyle='#1a1a1d'; ctx.fillRect(0,0,cvs.width,cvs.height); }
+        const t = performance.now() / 800;
+        const x = 60 + Math.sin(t) * 120, y = 380 + Math.sin(t*2) * 10;
+        if (spImg) ctx.drawImage(spImg, x, y, 64, 64); else { ctx.fillStyle='#4ab3ff'; ctx.fillRect(x,y,64,64); }
+        requestAnimationFrame(draw);
       }
-
-      // --- Input ---
-      const keys = { left:false, right:false, up:false, space:false, r:false };
-      addEventListener("keydown", e => {
-        if (e.key === "ArrowLeft")  keys.left = true;
-        if (e.key === "ArrowRight") keys.right = true;
-        if (e.key === "ArrowUp")    keys.up = true;
-        if (e.key === " " || e.code === "Space") keys.space = true;
-        if (e.key.toLowerCase() === "r") keys.r = true;
-      });
-      addEventListener("keyup", e => {
-        if (e.key === "ArrowLeft")  keys.left = false;
-        if (e.key === "ArrowRight") keys.right = false;
-        if (e.key === "ArrowUp")    keys.up = false;
-        if (e.key === " " || e.code === "Space") keys.space = false;
-        if (e.key.toLowerCase() === "r") keys.r = false;
-      });
-
-      // --- Simple starfield background ---
-      const STAR_COUNT = 80;
-      const stars = Array.from({length: STAR_COUNT}, () => ({
-        x: Math.random()*canvas.width,
-        y: Math.random()*canvas.height,
-        s: 1 + Math.random()*2,
-        v: 0.5 + Math.random()*1.5
-      }));
-
-      // --- Bullets & Enemies ---
-      const bullets = [];
-      const enemies = [];
-      let shootCooldown = 0;              // frames
-      let frame = 0, score = 0, gameOver = false;
-      let spawnEvery = /fast|galaxy|blaster/i.test(game.prompt || data.prompt) ? 60 : 90;
-
-      function rectsOverlap(a,b){
-        return a.x < b.x + b.w && a.x + a.w > b.x &&
-               a.y < b.y + b.h && a.y + a.h > b.y;
-      }
-
-      function reset(){
-        location.reload(); // simplest restart
-      }
-
-      function physics() {
-        if (gameOver) return;
-
-        // Player movement + gravity
-        p.vx = (keys.left ? -p.speed : 0) + (keys.right ? p.speed : 0);
-        p.x += p.vx;
-
-        p.vy += p.gravity;
-        p.y  += p.vy;
-
-        const onGround = p.y + p.h >= groundY;
-        if (onGround) { p.y = groundY - p.h; p.vy = 0; if (keys.up) p.vy = -p.jump; }
-
-        // Bounds
-        if (p.x < 0) p.x = 0;
-        if (p.x + p.w > canvas.width) p.x = canvas.width - p.w;
-
-        // Shooting
-        if (shootCooldown > 0) shootCooldown--;
-        if (keys.space && shootCooldown === 0) {
-          bullets.push({ x: p.x + p.w/2 - 3, y: p.y + 8, w: 6, h: 14, vy: -9 });
-          shootCooldown = 10; // lower = faster fire
-        }
-
-        // Update bullets
-        for (let i = bullets.length - 1; i >= 0; i--) {
-          const b = bullets[i];
-          b.y += b.vy;
-          if (b.y + b.h < 0) bullets.splice(i,1);
-        }
-
-        // Spawn enemies
-        if (frame % spawnEvery === 0) {
-          const ew = 40 + Math.random()*20;
-          enemies.push({
-            x: Math.random()*(canvas.width - ew),
-            y: -50,
-            w: ew,
-            h: 24 + Math.random()*14,
-            vy: 2 + Math.random()*1.5
-          });
-        }
-
-        // Update enemies & check collisions
-        for (let i = enemies.length - 1; i >= 0; i--) {
-          const e = enemies[i];
-          e.y += e.vy;
-
-          // Hit player?
-          if (rectsOverlap(e, p)) {
-            gameOver = true;
-          }
-
-          // Hit by any bullet?
-          for (let j = bullets.length - 1; j >= 0; j--) {
-            const b = bullets[j];
-            if (rectsOverlap(e, b)) {
-              enemies.splice(i,1);
-              bullets.splice(j,1);
-              score++;
-              break;
-            }
-          }
-
-          // Off-screen
-          if (e.y > canvas.height + 40) enemies.splice(i,1);
-        }
-
-        frame++;
-        if (keys.r && gameOver) reset();
-      }
-
-      function render() {
-        // Background
-        ctx.fillStyle = bg;
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-
-        // Starfield
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        stars.forEach(s=>{
-          s.y += s.v;
-          if (s.y > canvas.height) s.y = -2;
-          ctx.fillRect(s.x, s.y, s.s, s.s);
-        });
-
-        // Ground
-        ctx.fillStyle = "#2a2a2a";
-        ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
-
-        // Player
-        if (sprite && spriteReady) ctx.drawImage(sprite, p.x, p.y, p.w, p.h);
-        else { ctx.fillStyle = "#7cc8ff"; ctx.fillRect(p.x, p.y, p.w, p.h); }
-
-        // Bullets
-        ctx.fillStyle = "#ffffff";
-        bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
-
-        // Enemies
-        ctx.fillStyle = "#ff7a59";
-        enemies.forEach(e => ctx.fillRect(e.x, e.y, e.w, e.h));
-
-        // HUD
-        hud.textContent = gameOver
-          ? `Score: ${score} — GAME OVER (press R to restart)`
-          : `Score: ${score}`;
-      }
-
-      (function loop(){
-        physics(); render(); requestAnimationFrame(loop);
-      })();
-    }
+      draw();
+    })();
   </script>
 </body>
 </html>
