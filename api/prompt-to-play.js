@@ -23,7 +23,7 @@ async function listDir(prefix) {
     .map((it) => `${prefix}${it.name}`);
 }
 
-// Try to use api/_assets.js; if missing, fall back to inline scanner (prevents 500)
+// Prefer external scanner if present; otherwise inline tolerant scanner
 async function getScanAssets() {
   try {
     const mod = await import('./_assets.js');
@@ -68,12 +68,25 @@ export default async function handler(req, res) {
 
     const share_slug = makeSlug(prompt);
     const game_json = { version: 1, prompt, art: { sprite, background } };
+    const title = prompt;
 
-    const { data, error } = await supabase
+    // Try with title (handles NOT NULL). If the column doesn't exist, retry without.
+    let data, error;
+    ({ data, error } = await supabase
       .from('games')
-      .insert({ prompt, game_json, share_slug })
+      .insert({ prompt, title, game_json, share_slug })
       .select('share_slug')
-      .single();
+      .single());
+    if (error) {
+      const msg = (error.message || '').toLowerCase();
+      if (msg.includes('column') && msg.includes('title') && msg.includes('does not exist')) {
+        ({ data, error } = await supabase
+          .from('games')
+          .insert({ prompt, game_json, share_slug })
+          .select('share_slug')
+          .single());
+      }
+    }
     if (error) return res.status(500).json({ ok: false, error: error.message });
 
     const urlPath = `/play.html?slug=${data.share_slug}`;
