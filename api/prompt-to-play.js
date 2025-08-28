@@ -7,6 +7,7 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+// --- tolerant, self-contained scanner (no local imports) ---
 const BUCKET = 'game-assets';
 const SPRITE_DIRS = ['Spritesheet/', 'sprite/', 'Sprites/', 'PNG/'];
 const BG_DIRS = ['Backgrounds/', 'backgrounds/', 'BG/', 'bg/'];
@@ -18,23 +19,18 @@ async function listDir(prefix) {
     .list(prefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
   if (error) return [];
   return (data || [])
-    .filter((it) => it && it.name && isImage(it.name))
+    .filter((it) => it?.name && isImage(it.name))
     .map((it) => `${prefix}${it.name}`);
 }
 
-// Prefer external scanner; fall back to inline to avoid 500s
-async function getScanAssets() {
-  try {
-    const mod = await import('./_assets.js');
-    if (typeof mod.scanAssets === 'function') return mod.scanAssets;
-  } catch {}
-  return async function scanAssetsInline() {
-    const spriteLists = await Promise.all(SPRITE_DIRS.map(listDir));
-    const bgLists = await Promise.all(BG_DIRS.map(listDir));
-    const sprites = [...new Set(spriteLists.flat())];
-    const backgrounds = [...new Set(bgLists.flat())];
-    return { counts: { sprites: sprites.length, backgrounds: backgrounds.length }, sprites, backgrounds };
-  };
+async function scanAssets() {
+  const [spriteLists, bgLists] = await Promise.all([
+    Promise.all(SPRITE_DIRS.map(listDir)),
+    Promise.all(BG_DIRS.map(listDir)),
+  ]);
+  const sprites = [...new Set(spriteLists.flat())];
+  const backgrounds = [...new Set(bgLists.flat())];
+  return { counts: { sprites: sprites.length, backgrounds: backgrounds.length }, sprites, backgrounds };
 }
 
 function makeSlug(input) {
@@ -49,7 +45,7 @@ export default async function handler(req, res) {
     const prompt = (req.query.prompt || '').toString().trim() || 'untitled';
     const redirectFlag = String(req.query.redirect || '1') === '1';
 
-    const scanAssets = await getScanAssets();
+    // 1) Scan assets
     const assets = await scanAssets();
 
     // Step 1: counts only
@@ -57,19 +53,22 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, counts: assets.counts });
     }
 
+    // Need at least one of each to proceed
     if (assets.counts.sprites === 0 || assets.counts.backgrounds === 0) {
       return res.status(200).json({ ok: false, error: 'No assets found', counts: assets.counts });
     }
 
+    // 2) Pick random art
     const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
     const sprite = pick(assets.sprites);
     const background = pick(assets.backgrounds);
 
+    // 3) Save game (db requires title + slug; slug mirrors share_slug)
     const share_slug = makeSlug(prompt);
-    const title = prompt;
     const game_json = { version: 1, prompt, art: { sprite, background } };
+    const title = prompt;
 
-    // Insert with title + BOTH slug fields; gracefully fall back if a column doesn't exist.
+    // Insert, being tolerant of column differences
     let data, error;
     ({ data, error } = await supabase
       .from('games')
@@ -78,26 +77,21 @@ export default async function handler(req, res) {
       .single());
 
     if (error) {
+      // Retry paths if schema differs
       const msg = (error.message || error.details || '').toLowerCase();
-
-      // If 'slug' column doesn't exist
       if (msg.includes('column') && msg.includes('slug') && msg.includes('does not exist')) {
         ({ data, error } = await supabase
           .from('games')
           .insert({ prompt, title, game_json, share_slug })
           .select('share_slug')
           .single());
-      }
-      // If 'share_slug' column doesn't exist but 'slug' does
-      else if (msg.includes('column') && msg.includes('share_slug') && msg.includes('does not exist')) {
+      } else if (msg.includes('column') && msg.includes('share_slug') && msg.includes('does not exist')) {
         ({ data, error } = await supabase
           .from('games')
           .insert({ prompt, title, game_json, slug: share_slug })
           .select('slug')
           .single());
-      }
-      // If 'title' column doesn't exist
-      else if (msg.includes('column') && msg.includes('title') && msg.includes('does not exist')) {
+      } else if (msg.includes('column') && msg.includes('title') && msg.includes('does not exist')) {
         ({ data, error } = await supabase
           .from('games')
           .insert({ prompt, game_json, share_slug, slug: share_slug })
@@ -110,4 +104,10 @@ export default async function handler(req, res) {
 
     const finalSlug = data?.share_slug || data?.slug || share_slug;
     const urlPath = `/play.html?slug=${finalSlug}`;
-    const base = process.env.PUBLIC_SITE_URL
+    const base = process.env.PUBLIC_SITE_URL || '';
+    res.setHeader('Location', base ? `${base}${urlPath}` : urlPath);
+    return res.status(302).end();
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message || 'error' });
+  }
+}
