@@ -7,6 +7,8 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+const BUCKET = 'game-assets';
+
 export default async function handler(req, res) {
   try {
     if (req.method !== 'GET') {
@@ -18,39 +20,45 @@ export default async function handler(req, res) {
     const slug = (req.query.slug ?? req.query.share_slug ?? '').toString().trim();
 
     let row = null, error = null;
-
     if (idRaw) {
       const id = Number(idRaw);
-      const { data, error: e } = await supabase
+      const r = await supabase
         .from('games')
         .select('id,slug,share_slug,title,prompt,game_json,created_at')
-        .eq('id', id)
-        .limit(1);
-      error = e;
-      row = (data && data[0]) || null;
+        .eq('id', id).limit(1);
+      error = r.error; row = (r.data && r.data[0]) || null;
     } else if (slug) {
-      // Accept either slug or share_slug
-      const { data, error: e } = await supabase
+      const r = await supabase
         .from('games')
         .select('id,slug,share_slug,title,prompt,game_json,created_at')
         .or(`slug.eq.${slug},share_slug.eq.${slug}`)
-        .order('id', { ascending: false })
-        .limit(1);
-      error = e;
-      row = (data && data[0]) || null;
+        .order('id', { ascending: false }).limit(1);
+      error = r.error; row = (r.data && r.data[0]) || null;
     } else {
       return res.status(400).json({ ok: false, error: 'Missing id or slug' });
     }
 
-    if (error) {
-      return res.status(500).json({ ok: false, error: error.message || 'query error' });
+    if (error) return res.status(500).json({ ok: false, error: error.message || 'query error' });
+    if (!row)   return res.status(404).json({ ok: false, error: 'Not found' });
+
+    // Build public URLs for chosen art (bucket is public)
+    let sprite_url = null, background_url = null;
+    const spritePath = row?.game_json?.art?.sprite;
+    const bgPath = row?.game_json?.art?.background;
+    if (spritePath) {
+      sprite_url = supabase.storage.from(BUCKET).getPublicUrl(spritePath).data.publicUrl;
     }
-    if (!row) {
-      return res.status(404).json({ ok: false, error: 'Not found' });
+    if (bgPath) {
+      background_url = supabase.storage.from(BUCKET).getPublicUrl(bgPath).data.publicUrl;
     }
 
     const finalSlug = row.slug || row.share_slug || null;
-    return res.status(200).json({ ok: true, slug: finalSlug, game: row });
+    return res.status(200).json({
+      ok: true,
+      slug: finalSlug,
+      game: row,
+      asset_urls: { sprite_url, background_url }
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message || 'error' });
   }
