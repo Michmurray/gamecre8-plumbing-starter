@@ -22,32 +22,27 @@
   </div>
 </div>
 <script>
-const form = document.getElementById('f');
-const input = document.getElementById('p');
-const msg = document.getElementById('m');
+const f = document.getElementById('f');
+const p = document.getElementById('p');
+const m = document.getElementById('m');
 
-form.addEventListener('submit', async (e) => {
+f.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const prompt = input.value.trim() || 'quick smoke test';
-  msg.textContent = 'Creating…';
-
+  const prompt = p.value.trim() || 'quick smoke test';
+  m.textContent = 'Creating…';
   try {
-    const resp = await fetch('/api/prompt-create', {
+    const r = await fetch('/api/prompt-create', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt })
     });
-    const json = await resp.json();
-    if (!json.ok) {
-      msg.textContent = 'Error: ' + (json.error || 'failed');
-      return;
-    }
-    msg.innerHTML = 'Launching… If not redirected, open: ' +
-      `<a href="${json.url}">${json.url}</a>` +
-      `<br><small>Alternates: <a href="${json.candidates.play}">/play</a> · <a href="${json.candidates.play_html}">/play.html</a></small>`;
-    location.href = json.url; // navigate to the working one
+    const j = await r.json();
+    if (!j.ok) { m.textContent = 'Error: ' + (j.error || 'failed'); return; }
+    m.innerHTML = 'Launching… If not redirected, open: <a href="'+j.url+'">'+j.url+'</a>' +
+                  '<br><small>Alternates: <a href="'+j.candidates.play+'">/play</a> · <a href="'+j.candidates.play_html+'">/play.html</a></small>';
+    location.href = j.url; // navigate to the working one
   } catch (err) {
-    msg.textContent = 'Request failed: ' + err.message;
+    m.textContent = 'Request failed: ' + err.message;
   }
 });
 </script>
