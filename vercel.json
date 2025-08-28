@@ -1,1 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/play", "destination": "/api/play" },
+    { "source": "/play/", "destination": "/api/play" },
+    { "source": "/play.html", "destination": "/api/play" }
+  ]
+}
 
