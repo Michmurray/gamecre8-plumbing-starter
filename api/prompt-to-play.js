@@ -14,8 +14,7 @@ const isImage = (n) => /\.(png|jpg|jpeg|gif|webp)$/i.test(n);
 
 async function listDir(prefix) {
   const { data, error } = await supabase
-    .storage
-    .from(BUCKET)
+    .storage.from(BUCKET)
     .list(prefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
   if (error) return [];
   return (data || [])
@@ -23,7 +22,7 @@ async function listDir(prefix) {
     .map((it) => `${prefix}${it.name}`);
 }
 
-// Prefer external scanner if present; otherwise inline tolerant scanner
+// Prefer external scanner; fall back to inline to avoid 500s
 async function getScanAssets() {
   try {
     const mod = await import('./_assets.js');
@@ -67,33 +66,48 @@ export default async function handler(req, res) {
     const background = pick(assets.backgrounds);
 
     const share_slug = makeSlug(prompt);
-    const game_json = { version: 1, prompt, art: { sprite, background } };
     const title = prompt;
+    const game_json = { version: 1, prompt, art: { sprite, background } };
 
-    // Try with title (handles NOT NULL). If the column doesn't exist, retry without.
+    // Insert with title + BOTH slug fields; gracefully fall back if a column doesn't exist.
     let data, error;
     ({ data, error } = await supabase
       .from('games')
-      .insert({ prompt, title, game_json, share_slug })
-      .select('share_slug')
+      .insert({ prompt, title, game_json, share_slug, slug: share_slug })
+      .select('share_slug, slug')
       .single());
+
     if (error) {
-      const msg = (error.message || '').toLowerCase();
-      if (msg.includes('column') && msg.includes('title') && msg.includes('does not exist')) {
+      const msg = (error.message || error.details || '').toLowerCase();
+
+      // If 'slug' column doesn't exist
+      if (msg.includes('column') && msg.includes('slug') && msg.includes('does not exist')) {
         ({ data, error } = await supabase
           .from('games')
-          .insert({ prompt, game_json, share_slug })
+          .insert({ prompt, title, game_json, share_slug })
           .select('share_slug')
           .single());
       }
+      // If 'share_slug' column doesn't exist but 'slug' does
+      else if (msg.includes('column') && msg.includes('share_slug') && msg.includes('does not exist')) {
+        ({ data, error } = await supabase
+          .from('games')
+          .insert({ prompt, title, game_json, slug: share_slug })
+          .select('slug')
+          .single());
+      }
+      // If 'title' column doesn't exist
+      else if (msg.includes('column') && msg.includes('title') && msg.includes('does not exist')) {
+        ({ data, error } = await supabase
+          .from('games')
+          .insert({ prompt, game_json, share_slug, slug: share_slug })
+          .select('share_slug, slug')
+          .single());
+      }
     }
+
     if (error) return res.status(500).json({ ok: false, error: error.message });
 
-    const urlPath = `/play.html?slug=${data.share_slug}`;
-    const base = process.env.PUBLIC_SITE_URL || '';
-    res.setHeader('Location', base ? `${base}${urlPath}` : urlPath);
-    return res.status(302).end();
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message || 'error' });
-  }
-}
+    const finalSlug = data?.share_slug || data?.slug || share_slug;
+    const urlPath = `/play.html?slug=${finalSlug}`;
+    const base = process.env.PUBLIC_SITE_URL
