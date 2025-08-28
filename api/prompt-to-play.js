@@ -1,6 +1,5 @@
 // api/prompt-to-play.js
 import { createClient } from '@supabase/supabase-js';
-import { scanAssets } from './_assets.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -8,12 +7,40 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+const BUCKET = 'game-assets';
+const SPRITE_DIRS = ['Spritesheet/', 'sprite/', 'Sprites/', 'PNG/'];
+const BG_DIRS = ['Backgrounds/', 'backgrounds/', 'BG/', 'bg/'];
+const isImage = (n) => /\.(png|jpg|jpeg|gif|webp)$/i.test(n);
+
+async function listDir(prefix) {
+  const { data, error } = await supabase
+    .storage
+    .from(BUCKET)
+    .list(prefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+  if (error) return [];
+  return (data || [])
+    .filter((it) => it && it.name && isImage(it.name))
+    .map((it) => `${prefix}${it.name}`);
+}
+
+// Try to use api/_assets.js; if missing, fall back to inline scanner (prevents 500)
+async function getScanAssets() {
+  try {
+    const mod = await import('./_assets.js');
+    if (typeof mod.scanAssets === 'function') return mod.scanAssets;
+  } catch {}
+  return async function scanAssetsInline() {
+    const spriteLists = await Promise.all(SPRITE_DIRS.map(listDir));
+    const bgLists = await Promise.all(BG_DIRS.map(listDir));
+    const sprites = [...new Set(spriteLists.flat())];
+    const backgrounds = [...new Set(bgLists.flat())];
+    return { counts: { sprites: sprites.length, backgrounds: backgrounds.length }, sprites, backgrounds };
+  };
+}
+
 function makeSlug(input) {
   const base = (input || 'game')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)+/g, '')
-    .slice(0, 48);
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '').slice(0, 48);
   const rand = Math.random().toString(36).slice(2, 8);
   return `${base}-${rand}`;
 }
@@ -23,62 +50,36 @@ export default async function handler(req, res) {
     const prompt = (req.query.prompt || '').toString().trim() || 'untitled';
     const redirectFlag = String(req.query.redirect || '1') === '1';
 
-    // 1) Scan assets
+    const scanAssets = await getScanAssets();
     const assets = await scanAssets();
 
-    // If redirect=0, just report counts and exit (no save)
+    // Step 1: counts only
     if (!redirectFlag) {
       return res.status(200).json({ ok: true, counts: assets.counts });
     }
 
-    // Need at least 1 sprite + 1 background to proceed
     if (assets.counts.sprites === 0 || assets.counts.backgrounds === 0) {
-      return res
-        .status(200)
-        .json({ ok: false, error: 'No assets found', counts: assets.counts });
+      return res.status(200).json({ ok: false, error: 'No assets found', counts: assets.counts });
     }
 
-    // 2) Pick random art
     const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
     const sprite = pick(assets.sprites);
     const background = pick(assets.backgrounds);
 
-    // 3) Save game
     const share_slug = makeSlug(prompt);
-    const game_json = {
-      version: 1,
-      prompt,
-      art: { sprite, background },
-    };
+    const game_json = { version: 1, prompt, art: { sprite, background } };
 
     const { data, error } = await supabase
       .from('games')
       .insert({ prompt, game_json, share_slug })
       .select('share_slug')
       .single();
-
-    if (error) {
-      return res.status(500).json({ ok: false, error: error.message });
-    }
+    if (error) return res.status(500).json({ ok: false, error: error.message });
 
     const urlPath = `/play.html?slug=${data.share_slug}`;
     const base = process.env.PUBLIC_SITE_URL || '';
-
-    if (redirectFlag) {
-      res.setHeader('Location', base ? `${base}${urlPath}` : urlPath);
-      return res.status(302).end();
-    }
-
-    // (Not used here, but kept for symmetry)
-    return res
-      .status(200)
-      .json({
-        ok: true,
-        counts: assets.counts,
-        slug: data.share_slug,
-        url: urlPath,
-        chosen: { sprite, background },
-      });
+    res.setHeader('Location', base ? `${base}${urlPath}` : urlPath);
+    return res.status(302).end();
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message || 'error' });
   }
