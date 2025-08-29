@@ -1,4 +1,4 @@
-// GET (status) and POST (enqueue). 405-safe. Tolerant JSON parsing.
+// api/queue-prompt.js — GET status, POST enqueue. Tolerant JSON. 405-safe.
 module.exports = async function handler(req, res) {
   try {
     if (!global._gc8Queue) global._gc8Queue = [];
@@ -25,10 +25,4 @@ module.exports = async function handler(req, res) {
     }
 
     res.setHeader('Allow', ['GET', 'POST']);
-    return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err?.message || err) });
-  }
-};
-
-module.exports.config = { runtime: 'nodejs' };
+    retur
