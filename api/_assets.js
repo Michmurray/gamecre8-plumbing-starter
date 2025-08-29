@@ -1,108 +1,57 @@
-// api/_assets.js
-import { createClient } from "@supabase/supabase-js";
+// api/_assets.js — list sprite/background assets from Supabase.
+const https = require('https');
 
-const BUCKET = "game-assets";
-const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE, {
-  auth: { persistSession: false }
-});
+const BUCKET = process.env.SUPABASE_BUCKET || 'game-assets';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
+const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX
+  ? [process.env.BACKGROUNDS_PREFIX]
+  : ['Backgrounds/', 'backgrounds/', 'sprite/Backgrounds/'];
 
-// List of folders we'll scan for sprites (add/remove as you like)
-const SPRITE_PREFIXES = ["Spritesheet", "sprite", "Sprites", "PNG"];
-const BG_PREFIXES = ["Backgrounds"];
-
-export async function buildManifest() {
-  const sprites = await listMany(SPRITE_PREFIXES);
-  const bgs     = await listMany(BG_PREFIXES);
-
-  const spriteAssets = sprites
-    .filter(isImage)
-    .map((p) => toAsset("sprite", p));
-  const bgAssets = bgs
-    .filter(isImage)
-    .map((p) => toAsset("background", p));
-
-  return {
-    generatedAt: new Date().toISOString(),
-    sprites: spriteAssets,
-    backgrounds: bgAssets,
-  };
-}
-
-function isImage(p) {
-  return /\.(png|jpg|jpeg|gif|webp)$/i.test(p);
-}
-
-function toAsset(kind, path) {
-  const parts = path.split("/").map(s => s.toLowerCase());
-  const name = parts[parts.length - 1].replace(/\.[^.]+$/, "");
-  const words = [
-    ...parts,
-    ...name.split(/[\s_\-]+/).map(s => s.toLowerCase())
-  ];
-
-  const tags = Array.from(new Set(
-    words.map(normalizeTag)
-        .filter(Boolean)
-  ));
-
-  return { kind, path, url: path, name, tags };
-}
-
-function normalizeTag(t) {
-  t = t.replace(/[^a-z0-9]/g, "");
-  if (!t) return null;
-  if (t === "spaceship") t = "ship";
-  if (t === "bg" || t === "backgrounds") t = "background";
-  if (t === "spritesheet") return null;
-  return t;
-}
-
-async function listMany(prefixes) {
-  const all = [];
-  for (const p of prefixes) {
-    const items = await listRecursive(p);
-    all.push(...items);
-  }
-  // de-dup
-  return Array.from(new Set(all));
-}
-
-async function listRecursive(prefix) {
-  const out = [];
-  await walk(prefix, out);
-  return out;
-}
-
-async function walk(prefix, out) {
-  const { data, error } = await db.storage.from(BUCKET).list(prefix, {
-    limit: 1000,
-    sortBy: { column: "name", order: "asc" }
+function postJSON(urlStr, headers, body) {
+  return new Promise((resolve, reject) => {
+    try {
+      const u = new URL(urlStr);
+      const data = JSON.stringify(body || {});
+      const opts = {
+        method: 'POST',
+        hostname: u.hostname,
+        path: u.pathname + (u.search || ''),
+        port: 443,
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...headers }
+      };
+      const req = https.request(opts, (res) => {
+        let buf = ''; res.on('data', d => buf += d);
+        res.on('end', () => { let j=null; try{ j=JSON.parse(buf||'null'); }catch{} resolve({ status:res.statusCode, json:j, text:buf }); });
+      });
+      req.on('error', reject); req.write(data); req.end();
+    } catch (e) { reject(e); }
   });
-  if (error || !data) return;
-  for (const item of data) {
-    const isFolder = !item.metadata || typeof item.metadata.size !== "number";
-    if (isFolder) {
-      await walk(`${prefix}/${item.name}`, out);
-    } else {
-      out.push(`${prefix}/${item.name}`);
-    }
-  }
 }
 
-export function pickBest(assets, wantTags) {
-  if (!assets.length) return null;
-  const scored = assets.map(a => ({ a, s: score(a.tags, wantTags) }));
-  scored.sort((x, y) => y.s - x.s);
-  return (scored[0].s > 0) ? scored[0].a : assets[Math.floor(Math.random() * assets.length)];
+async function supaList(prefix) {
+  const endpoint = `${SUPABASE_URL}/storage/v1/object/list/${BUCKET}`;
+  const { json } = await postJSON(endpoint,
+    { apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+    { prefix, limit: 1000, sortBy: { column: 'name', order: 'asc' } }
+  );
+  if (!Array.isArray(json)) return [];
+  return json
+    .filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name))
+    .map(e => ({ name: e.name, url: `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${prefix}${e.name}` }));
 }
 
-function score(haveTags, wantTags) {
-  let s = 0;
-  for (const w of wantTags) {
-    for (const h of haveTags) {
-      if (h === w) s += 3;
-      else if (h.includes(w) || w.includes(h)) s += 1;
+module.exports = async (req, res) => {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      return res.status(200).json({ ok:false, error:'Supabase env missing' });
     }
+    const sprites = await supaList(SPRITES_PREFIX);
+    let bgs = [], used = BG_CANDIDATES[0];
+    for (const cand of BG_CANDIDATES) { const rows = await supaList(cand); if (rows.length) { bgs=rows; used=cand; break; } }
+    return res.status(200).json({ ok:true, counts:{ sprites:sprites.length, backgrounds:bgs.length }, prefixes:{ sprites:SPRITES_PREFIX, backgrounds:used }, sprites, backgrounds:bgs });
+  } catch (err) {
+    return res.status(200).json({ ok:false, error:String(err?.message||err) });
   }
-  return s;
-}
+};
