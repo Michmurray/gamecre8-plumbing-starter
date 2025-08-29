@@ -1,70 +1,58 @@
-// Counts sprites/backgrounds from Supabase (if ASSETS_SOURCE=supabase) or /public fallback.
-// Node runtime only (Vercel Serverless).
-const path = require('path');
-
-const useSupa = (process.env.ASSETS_SOURCE || '').toLowerCase() === 'supabase';
-const bucket = process.env.SUPABASE_BUCKET || 'game-assets';
-const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
-const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX
-  ? [process.env.BACKGROUNDS_PREFIX]
-  : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
-
-const _fetch = global.fetch || ((...args) =>
-  import('node-fetch').then(({ default: f }) => f(...args)));
-
-async function supaList(prefix) {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY;
-  if (!url || !key) return { rows: [], note: 'missing supabase env' };
-
-  const endpoint = `${url}/storage/v1/object/list/${bucket}`;
-  const body = { prefix, limit: 1000, sortBy: { column: 'name', order: 'asc' } };
-
-  const r = await _fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
-    body: JSON.stringify(body),
-  });
-  const j = await r.json();
-  return {
-    rows: Array.isArray(j) ? j.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name)) : [],
-    note: 'supabase scan'
-  };
-}
-
-async function countSupabase(prefixes) {
-  for (const p of prefixes) {
-    const { rows } = await supaList(p);
-    if (rows.length) return { count: rows.length, picked: p };
-  }
-  return { count: 0, picked: prefixes[0] };
-}
-
-function fsCount(dir) {
-  try { return require('fs').readdirSync(dir).filter(f => !f.startsWith('.')).length; }
-  catch { return 0; }
-}
-
+// api/scan-assets.js
+// Crash-proof counts from Supabase. Node serverless only (no node-fetch, no FS).
 module.exports = async (req, res) => {
   try {
-    let sprites = 0, backgrounds = 0, notes = '';
-
-    if (useSupa) {
-      const s = await countSupabase([SPRITES_PREFIX]);
-      const b = await countSupabase(BG_CANDIDATES);
-      sprites = s.count; backgrounds = b.count;
-      notes = `supabase scan succeeded (sprites:${s.count}@${s.picked} bg:${b.count}@${b.picked})`;
-    } else {
-      const publicDir = path.join(process.cwd(), 'public');
-      sprites = fsCount(path.join(publicDir, 'sprite'));
-      backgrounds = fsCount(path.join(publicDir, 'backgrounds'));
-      notes = 'filesystem scan succeeded';
+    // Require Supabase mode (matches your setup)
+    const ASSETS_SOURCE = (process.env.ASSETS_SOURCE || '').toLowerCase();
+    if (ASSETS_SOURCE !== 'supabase') {
+      return res.status(200).json({ ok: false, error: 'ASSETS_SOURCE must be "supabase"' });
     }
 
-    return res.status(200).json({ ok: true, counts: { sprites, backgrounds }, notes });
+    const url   = process.env.SUPABASE_URL;                // e.g. https://xxxx.supabase.co
+    const key   = process.env.SUPABASE_ANON_KEY;           // anon public key
+    const bucket= process.env.SUPABASE_BUCKET || 'game-assets';
+    const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
+    const BG_CANDIDATES  = process.env.BACKGROUNDS_PREFIX
+      ? [process.env.BACKGROUNDS_PREFIX]                  // e.g. Backgrounds/
+      : ['Backgrounds/', 'backgrounds/', 'sprite/Backgrounds/'];
+
+    if (!url || !key) {
+      return res.status(200).json({ ok: false, error: 'missing_supabase_env (SUPABASE_URL or SUPABASE_ANON_KEY)' });
+    }
+    if (typeof fetch !== 'function') {
+      return res.status(200).json({ ok: false, error: 'fetch_unavailable_in_runtime' });
+    }
+
+    async function list(prefix) {
+      const r = await fetch(`${url}/storage/v1/object/list/${bucket}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ prefix, limit: 1000, sortBy: { column: 'name', order: 'asc' } })
+      });
+      const j = await r.json();
+      if (!Array.isArray(j)) return [];
+      return j.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name));
+    }
+
+    const spriteRows = await list(SPRITES_PREFIX);
+
+    let bgRows = [];
+    let pickedBgPrefix = BG_CANDIDATES[0];
+    for (const cand of BG_CANDIDATES) {
+      const rows = await list(cand);
+      if (rows.length) { bgRows = rows; pickedBgPrefix = cand; break; }
+    }
+
+    return res.status(200).json({
+      ok: true,
+      counts: { sprites: spriteRows.length, backgrounds: bgRows.length },
+      notes: `supabase scan succeeded (bgPrefix=${pickedBgPrefix})`
+    });
   } catch (err) {
-    return res.status(200).json({ ok: false, error: String(err?.message || err) }); // never hard-crash
+    // Never hard-crash: always return JSON
+    return res.status(200).json({ ok: false, error: String(err?.message || err) });
   }
 };
 
-module.exports.config = { runtime: 'nodejs' };
+// Force Node serverless runtime
+module.exports.config = { runtime: 'nodejs18.x' };
