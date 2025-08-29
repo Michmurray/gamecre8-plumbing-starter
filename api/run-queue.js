@@ -1,92 +1,42 @@
-// Pops one queued prompt, picks assets (Supabase if configured), saves game, redirects if requested.
-const path = require('path');
-const bucket = process.env.SUPABASE_BUCKET || 'game-assets';
-const useSupa = (process.env.ASSETS_SOURCE || '').toLowerCase() === 'supabase';
+// api/run-queue.js — pops queued prompt, picks assets (Supabase), saves game, redirects if requested.
+const https = require('https');
+
+const BUCKET = process.env.SUPABASE_BUCKET || 'game-assets';
+const ASSETS_SOURCE = (process.env.ASSETS_SOURCE || '').toLowerCase();
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
-const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX
-  ? [process.env.BACKGROUNDS_PREFIX]
-  : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
+const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX ? [process.env.BACKGROUNDS_PREFIX] : ['Backgrounds/','backgrounds/','sprite/Backgrounds/'];
 
-const _fetch = global.fetch || ((...args) =>
-  import('node-fetch').then(({ default: f }) => f(...args)));
-
-function slugify(text) {
-  return (text || 'game').toString().toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '')
-    + '-' + Math.random().toString(16).slice(2, 7);
-}
-function store() { if (!global._gc8Store) global._gc8Store = { games: {} }; return global._gc8Store; }
-
-async function supaList(prefix) {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY;
-  if (!url || !key) return [];
-  const endpoint = `${url}/storage/v1/object/list/${bucket}`;
-  const body = { prefix, limit: 1000, sortBy: { column: 'name', order: 'asc' } };
-  const r = await _fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
-    body: JSON.stringify(body),
+function postJSON(urlStr, headers, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const data = JSON.stringify(body || {});
+    const opts = {
+      method: 'POST', hostname: u.hostname, path: u.pathname + (u.search || ''), port: 443,
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...headers }
+    };
+    const req = https.request(opts, (res) => { let buf=''; res.on('data',d=>buf+=d); res.on('end',()=>{ let j=null; try{ j=JSON.parse(buf||'null'); }catch{} resolve({status:res.statusCode,json:j,text:buf}); });});
+    req.on('error', reject); req.write(data); req.end();
   });
-  const j = await r.json();
-  if (!Array.isArray(j)) return [];
-  return j.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name)).map(e => ({
+}
+
+async function supaList(prefix){
+  const endpoint = `${SUPABASE_URL}/storage/v1/object/list/${BUCKET}`;
+  const { json } = await postJSON(endpoint, { apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${SUPABASE_ANON_KEY}` }, { prefix, limit:1000, sortBy:{ column:'name', order:'asc' } });
+  if (!Array.isArray(json)) return [];
+  return json.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name)).map(e => ({
     name: e.name,
-    url: `${url}/storage/v1/object/public/${bucket}/${prefix}${e.name}`,
+    url: `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${prefix}${e.name}`
   }));
 }
 
-async function pickSupabase() {
-  let sprites = []; for (const p of [SPRITES_PREFIX]) { const rows = await supaList(p); if (rows.length) { sprites = rows; break; } }
-  let bgs = []; for (const p of BG_CANDIDATES) { const rows = await supaList(p); if (rows.length) { bgs = rows; break; } }
-  return { sprites, bgs };
+function slugify(text) {
+  return (text || 'game').toString().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)+/g,'') + '-' + Math.random().toString(16).slice(2,7);
 }
-
-function pickFs(dir) {
-  try {
-    const fs = require('fs');
-    const files = fs.readdirSync(dir).filter(f => !f.startsWith('.'));
-    if (!files.length) return null;
-    return files[Math.floor(Math.random() * files.length)];
-  } catch { return null; }
-}
+function store() { if (!global._gc8Store) global._gc8Store = { games: {} }; return global._gc8Store; }
 
 module.exports = async (req, res) => {
   try {
     if (!global._gc8Queue || !global._gc8Queue.length) {
-      return res.status(200).json({ ok: false, error: 'queue empty' });
-    }
-    const job = global._gc8Queue.shift();
-
-    let art = {};
-    if (useSupa) {
-      const { sprites, bgs } = await pickSupabase();
-      if (!sprites.length || !bgs.length) {
-        return res.status(200).json({ ok: false, error: 'assets missing for run-queue' });
-      }
-      const s = sprites[Math.floor(Math.random() * sprites.length)];
-      const b = bgs[Math.floor(Math.random() * bgs.length)];
-      art = { sprite: `supabase:${s.url}`, background: `supabase:${b.url}`, sprite_url: s.url, background_url: b.url };
-    } else {
-      const publicDir = path.join(process.cwd(), 'public');
-      const s = pickFs(path.join(publicDir, 'sprite'));
-      const b = pickFs(path.join(publicDir, 'backgrounds'));
-      if (!s || !b) return res.status(200).json({ ok: false, error: 'assets missing for run-queue' });
-      art = { sprite: 'sprite/' + s, background: 'backgrounds/' + b };
-    }
-
-    const slug = slugify(job.prompt || 'game');
-    const st = store();
-    st.games[slug] = { slug, prompt: job.prompt, art, created_at: new Date().toISOString() };
-
-    if (job.redirect) {
-      res.writeHead(302, { Location: `/play.html?slug=${slug}` });
-      return res.end();
-    }
-    return res.status(200).json({ ok: true, slug, redirected: false });
-  } catch (err) {
-    return res.status(200).json({ ok: false, error: String(err?.message || err) });
-  }
-};
-
-module.exports.config = { runtime: 'nodejs' };
+      return res.status(200).json({ ok:fal
