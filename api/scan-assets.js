@@ -51,4 +51,8 @@ module.exports = async (req, res) => {
     let b = [], used = BG_CANDIDATES[0];
     for (const cand of BG_CANDIDATES) { const r = await list(cand); if (r.length) { b=r; used=cand; break; } }
 
-    return res.status(200).json({ ok:true, counts:{ sprites:s.length, backgrounds:b.length }
+    return res.status(200).json({ ok:true, counts:{ sprites:s.length, backgrounds:b.length }, notes:`supabase scan succeeded (bgPrefix=${used})` });
+  } catch (err) {
+    return res.status(200).json({ ok:false, error:String(err?.message || err) });
+  }
+};
