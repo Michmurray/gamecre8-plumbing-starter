@@ -1,12 +1,14 @@
-// api/one-shot.js
-// One-shot: picks random sprite/background, stores in-memory game, redirects to /play.html?slug=...
+// Picks random sprite/background, stores an in-memory "game", redirects to /play.html?slug=...
 const path = require('path');
 const bucket = process.env.SUPABASE_BUCKET || 'game-assets';
 const useSupa = (process.env.ASSETS_SOURCE || '').toLowerCase() === 'supabase';
 const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
-const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX ? [process.env.BACKGROUNDS_PREFIX] : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
+const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX
+  ? [process.env.BACKGROUNDS_PREFIX]
+  : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
 
-const _fetch = global.fetch || ((...args) => import('node-fetch').then(({ default: f }) => f(...args)));
+const _fetch = global.fetch || ((...args) =>
+  import('node-fetch').then(({ default: f }) => f(...args)));
 
 function slugify(text) {
   return (text || 'game').toString().toLowerCase()
