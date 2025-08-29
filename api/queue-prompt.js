@@ -1,52 +1,34 @@
-// api/queue-prompt.js
-import { createClient } from "@supabase/supabase-js";
-
-const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE, {
-  auth: { persistSession: false }
-});
-
-export default async function handler(req, res) {
+// GET (status) and POST (enqueue). 405-safe. Tolerant JSON parsing.
+module.exports = async function handler(req, res) {
   try {
-    // Accept GET ?prompt=... or POST {"prompt":"..."}
-    let prompt = "";
+    if (!global._gc8Queue) global._gc8Queue = [];
 
-    if (req.method === "GET") {
-      prompt = (req.query.prompt || "").toString().trim();
-    } else if (req.method === "POST") {
-      const body = await readJson(req);
-      prompt = (body?.prompt || "").toString().trim();
-    } else {
-      // Do not 405—fall back to GET-style so /api/prompt-to-play can call it freely
-      prompt = (req.query.prompt || "").toString().trim();
+    if (req.method === 'GET') {
+      return res.status(200).json({ ok: true, queue_depth: global._gc8Queue.length, note: 'queue-prompt GET ok' });
     }
 
-    if (!prompt) {
-      return res.status(400).json({ ok: false, error: "Missing prompt" });
+    if (req.method === 'POST') {
+      let body = {};
+      try {
+        body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+      } catch (_e) {
+        return res.status(400).json({ ok: false, error: 'Invalid JSON body' });
+      }
+      const prompt = (body.prompt || '').toString().trim();
+      const redirect = body.redirect ? 1 : 0;
+      if (!prompt) return res.status(400).json({ ok: false, error: 'Missing "prompt"' });
+
+      const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      global._gc8Queue.push({ id, prompt, redirect, createdAt: Date.now() });
+
+      return res.status(202).json({ ok: true, id, queue_depth: global._gc8Queue.length, note: 'queued' });
     }
 
-    const { data, error } = await db
-      .from("prompt_queue")
-      .insert([{ prompt, status: "queued" }])
-      .select("id, prompt, status, created_at")
-      .single();
-
-    if (error) {
-      return res.status(500).json({ ok: false, error: error.message || String(error) });
-    }
-
-    return res.status(200).json({ ok: true, ...data });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e) });
+    res.setHeader('Allow', ['GET', 'POST']);
+    return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
-}
+};
 
-async function readJson(req) {
-  try {
-    const chunks = [];
-    for await (const ch of req) chunks.push(ch);
-    const raw = Buffer.concat(chunks).toString("utf8");
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
+module.exports.config = { runtime: 'nodejs' };
