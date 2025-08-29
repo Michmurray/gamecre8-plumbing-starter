@@ -1,81 +1,92 @@
-// api/run-queue.js
-// Processes pending prompts: Olli brief → generate → save → mark done.
+// Pops one queued prompt, picks assets (Supabase if configured), saves game, redirects if requested.
+const path = require('path');
+const bucket = process.env.SUPABASE_BUCKET || 'game-assets';
+const useSupa = (process.env.ASSETS_SOURCE || '').toLowerCase() === 'supabase';
+const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
+const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX
+  ? [process.env.BACKGROUNDS_PREFIX]
+  : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
 
-import { createClient } from "@supabase/supabase-js";
+const _fetch = global.fetch || ((...args) =>
+  import('node-fetch').then(({ default: f }) => f(...args)));
 
-const SITE  = process.env.PUBLIC_SITE_URL;            // e.g. https://<your-app>.vercel.app
-const BATCH = Number(process.env.QUEUE_BATCH || 5);   // items per run
+function slugify(text) {
+  return (text || 'game').toString().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '')
+    + '-' + Math.random().toString(16).slice(2, 7);
+}
+function store() { if (!global._gc8Store) global._gc8Store = { games: {} }; return global._gc8Store; }
 
-const db = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE,
-  { auth: { persistSession: false } }
-);
+async function supaList(prefix) {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return [];
+  const endpoint = `${url}/storage/v1/object/list/${bucket}`;
+  const body = { prefix, limit: 1000, sortBy: { column: 'name', order: 'asc' } };
+  const r = await _fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!Array.isArray(j)) return [];
+  return j.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name)).map(e => ({
+    name: e.name,
+    url: `${url}/storage/v1/object/public/${bucket}/${prefix}${e.name}`,
+  }));
+}
 
-export default async function handler(req, res) {
+async function pickSupabase() {
+  let sprites = []; for (const p of [SPRITES_PREFIX]) { const rows = await supaList(p); if (rows.length) { sprites = rows; break; } }
+  let bgs = []; for (const p of BG_CANDIDATES) { const rows = await supaList(p); if (rows.length) { bgs = rows; break; } }
+  return { sprites, bgs };
+}
+
+function pickFs(dir) {
   try {
-    // 1) pull some pending jobs
-    const { data: pending, error } = await db
-      .from("prompt_queue").select("*")
-      .eq("status","pending")
-      .order("created_at",{ ascending:true })
-      .limit(BATCH);
-    if (error) return res.status(500).json({ ok:false, error:error.message });
+    const fs = require('fs');
+    const files = fs.readdirSync(dir).filter(f => !f.startsWith('.'));
+    if (!files.length) return null;
+    return files[Math.floor(Math.random() * files.length)];
+  } catch { return null; }
+}
 
-    const results = [];
-    for (const row of pending) {
-      // 2) claim this job (avoid double work)
-      const claim = await db.from("prompt_queue")
-        .update({ status:"working" })
-        .eq("id", row.id).eq("status","pending")
-        .select("id").single();
-      if (claim.error || !claim.data) continue;
+module.exports = async (req, res) => {
+  try {
+    if (!global._gc8Queue || !global._gc8Queue.length) {
+      return res.status(200).json({ ok: false, error: 'queue empty' });
+    }
+    const job = global._gc8Queue.shift();
 
-      try {
-        // 3a) optional Olli brief for better tuning
-        let brief = null;
-        try {
-          brief = await post("/api/olli-brief", {
-            answers:{ theme: row.prompt, pace:"medium", jump:"normal" }
-          });
-        } catch {}
-
-        // 3b) generate the game
-        const genBody = brief?.engine ? { prompt: row.prompt, brief } : { prompt: row.prompt };
-        const game = await post("/api/generatr", genBody);
-
-        // 3c) save it (store engine/brief too)
-        const saved = await post("/api/save-game", {
-          prompt: game.prompt, game, engine: game.engine || null, brief: brief || null
-        });
-
-        await db.from("prompt_queue")
-          .update({ status:"done", result_slug: saved.slug, brief: brief || null })
-          .eq("id", row.id);
-
-        results.push({ id: row.id, slug: saved.slug });
-      } catch (err) {
-        await db.from("prompt_queue")
-          .update({ status:"error", error: String(err) })
-          .eq("id", row.id);
-        results.push({ id: row.id, error: String(err) });
+    let art = {};
+    if (useSupa) {
+      const { sprites, bgs } = await pickSupabase();
+      if (!sprites.length || !bgs.length) {
+        return res.status(200).json({ ok: false, error: 'assets missing for run-queue' });
       }
+      const s = sprites[Math.floor(Math.random() * sprites.length)];
+      const b = bgs[Math.floor(Math.random() * bgs.length)];
+      art = { sprite: `supabase:${s.url}`, background: `supabase:${b.url}`, sprite_url: s.url, background_url: b.url };
+    } else {
+      const publicDir = path.join(process.cwd(), 'public');
+      const s = pickFs(path.join(publicDir, 'sprite'));
+      const b = pickFs(path.join(publicDir, 'backgrounds'));
+      if (!s || !b) return res.status(200).json({ ok: false, error: 'assets missing for run-queue' });
+      art = { sprite: 'sprite/' + s, background: 'backgrounds/' + b };
     }
 
-    res.status(200).json({ ok:true, processed: results.length, results });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:String(e) });
-  }
-}
+    const slug = slugify(job.prompt || 'game');
+    const st = store();
+    st.games[slug] = { slug, prompt: job.prompt, art, created_at: new Date().toISOString() };
 
-async function post(path, body){
-  const r = await fetch(abs(path), {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify(body)
-  });
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
-}
-function abs(p){ return p.startsWith("http") ? p : `${SITE}${p}`; }
+    if (job.redirect) {
+      res.writeHead(302, { Location: `/play.html?slug=${slug}` });
+      return res.end();
+    }
+    return res.status(200).json({ ok: true, slug, redirected: false });
+  } catch (err) {
+    return res.status(200).json({ ok: false, error: String(err?.message || err) });
+  }
+};
+
+module.exports.config = { runtime: 'nodejs' };
