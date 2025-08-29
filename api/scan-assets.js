@@ -1,16 +1,16 @@
-// api/scan-assets.js
 // Counts sprites/backgrounds from Supabase (if ASSETS_SOURCE=supabase) or /public fallback.
-// Node runtime only (works on Vercel Serverless).
+// Node runtime only (Vercel Serverless).
 const path = require('path');
 
 const useSupa = (process.env.ASSETS_SOURCE || '').toLowerCase() === 'supabase';
 const bucket = process.env.SUPABASE_BUCKET || 'game-assets';
 const SPRITES_PREFIX = process.env.SPRITES_PREFIX || 'sprite/';
-const BACKGROUNDS_PREFIX_ENV = process.env.BACKGROUNDS_PREFIX; // may be undefined
-const BG_CANDIDATES = BACKGROUNDS_PREFIX_ENV ? [BACKGROUNDS_PREFIX_ENV] : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
+const BG_CANDIDATES = process.env.BACKGROUNDS_PREFIX
+  ? [process.env.BACKGROUNDS_PREFIX]
+  : ['backgrounds/', 'Backgrounds/', 'sprite/Backgrounds/'];
 
-// dynamic fetch for Node 16 safety
-const _fetch = global.fetch || ((...args) => import('node-fetch').then(({ default: f }) => f(...args)));
+const _fetch = global.fetch || ((...args) =>
+  import('node-fetch').then(({ default: f }) => f(...args)));
 
 async function supaList(prefix) {
   const url = process.env.SUPABASE_URL;
@@ -26,7 +26,10 @@ async function supaList(prefix) {
     body: JSON.stringify(body),
   });
   const j = await r.json();
-  return { rows: Array.isArray(j) ? j.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name)) : [], note: 'supabase scan' };
+  return {
+    rows: Array.isArray(j) ? j.filter(e => /\.(png|jpe?g|webp|gif)$/i.test(e.name)) : [],
+    note: 'supabase scan'
+  };
 }
 
 async function countSupabase(prefixes) {
