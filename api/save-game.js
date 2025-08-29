@@ -1,40 +1,17 @@
-import { createClient } from "@supabase/supabase-js";
+// api/save-game.js — upsert a game (used by debug/testing).
+function store(){ if(!global._gc8Store) global._gc8Store={games:{}}; return global._gc8Store; }
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE,
-  { auth: { persistSession: false } }
-);
-
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", ["POST"]);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
-  }
-
+module.exports = async (req, res) => {
   try {
-    const { prompt, game, engine = null, brief = null } = req.body || {};
-    if (!prompt || !game) return res.status(400).json({ error: "Missing prompt or game" });
-
-    const slug = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
-
-    const { error } = await supabase.from("game_saves").insert({
-      prompt,
-      game_json: game,
-      share_slug: slug,
-      engine,
-      brief
-    });
-
-    if (error) {
-      console.error("DB insert error:", error);
-      return res.status(500).json({ error: "DB insert failed" });
-    }
-
-    const share_url = `${process.env.PUBLIC_SITE_URL}/play.html?slug=${slug}`;
-    return res.status(200).json({ ok: true, slug, share_url });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: "Internal Server Error" });
+    let body = {};
+    try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}); } catch {}
+    const slug = (body.slug || '').trim();
+    const game = body.game;
+    if (!slug || !game) return res.status(400).json({ ok:false, error:'slug and game required' });
+    const st = store();
+    st.games[slug] = game;
+    return res.status(200).json({ ok:true, saved:true });
+  } catch (err) {
+    return res.status(500).json({ ok:false, error:String(err?.message||err) });
   }
-}
+};
