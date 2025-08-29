@@ -1,3 +1,2 @@
-export default function handler(req, res) {
-  res.status(200).json({ ok: true, message: "Health check OK" });
-}
+// api/health.js — simple healthcheck.
+module.exports = async (_req, res) => res.status(200).json({ ok: true, status: 'healthy' });
